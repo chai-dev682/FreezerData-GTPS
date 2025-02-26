@@ -16,7 +16,11 @@ from app.utils.pdf_tools import process_pdf
 
 
 def format_rag_contexts(matches: list):
-    context_str = "\n---\n".join([i.get_content() for i in matches])
+    context_str = ""
+    for match in matches:
+        context_str += f"## PDF file name: {match.metadata['file_name']}\n"
+        context_str += f"### Page label: {match.metadata['page_label']}\n"
+        context_str += f"Context: {match.get_content()}\n---\n"
     return context_str
 
 class VectorDBService:
@@ -61,7 +65,11 @@ class VectorDBService:
         self.vector_index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
 
     def upsert_manual(self, manual: Manuals):
-        object_ids = mysql_db.query(f"SELECT object_id FROM ObjectManual WHERE manual_id = {manual['id']}")
+        object_ids = mysql_db.query(f"SELECT ObjectDB.object_id \
+            FROM ObjectDB \
+            INNER JOIN ObjectManual ON ObjectDB.id = ObjectManual.object_id \
+            WHERE ObjectManual.manual_id = {manual['id']}"
+        )
         metadata = {
             "manual_id": manual["id"],
             "object_ids": [str(id["object_id"]) for id in object_ids]

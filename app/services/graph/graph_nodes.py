@@ -88,6 +88,13 @@ def data_retrieval_node(state: GraphState) -> GraphState:
     try:
         # Get relevant context from vector database using the user's query
         context_results = vector_db.query(state.query, state.object.object_id)
+        if context_results == "":
+            state.messages.append({
+                "role": "assistant",
+                "content": "I couldn't find any relevant information in the manuals. Please try again with a different object ID. I will initiate object ID as None."
+            })
+            state.object = None
+            return state
         
         # Format conversation history for context
         conversation_history = format_conversation_history(state.messages)
