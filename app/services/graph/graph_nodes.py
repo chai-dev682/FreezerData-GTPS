@@ -1,18 +1,15 @@
 from typing import List, Dict
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-import pandas as pd
 
 from app.core.config import settings, ModelType
-from app.db.vectordb import vector_db
-from app.db.mysql import mysql_db
 from app.core.logging import logger
-from app.core.prompt_templates.query_transformation import query_transformation
-from app.core.prompt_templates.sql_vector import sql_vector
-from app.core.prompt_templates.generate_sql import generate_sql
-from app.core.prompt_templates.generate_response import generate_response
-from app.core.function_templates.sql_vector import sql_vector_tool
-from .graph_state import GraphState, DatabaseEnum
+from app.core.prompt_templates.troubleshoot import troubleshoot
+from app.core.function_templates.extract_object_id import extract_object_id_tool
+from app.db.mysql import mysql_db
+from app.db.vectordb import vector_db
+from app.schemas.freezer_data import ObjectDB
+from .graph_state import GraphState
 
 model = ChatOpenAI(
     model=ModelType.gpt4o,
@@ -32,114 +29,89 @@ def extract_function_params(prompt, function):
 def format_conversation_history(messages: List[Dict[str, str]]) -> str:
     return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
-def query_transformation_node(state: GraphState) -> GraphState:
-    # response = model.invoke([state.messages + SystemMessage(query_transformation.format(
-    #     query=state.messages[-1]["content"]
-    # ))])
+def has_object_id(state: GraphState) -> str:
+    return "extract_object_id" if state.object is None else "data_retrieval"
+
+def extract_object_id_node(state: GraphState) -> GraphState:
+    try:
+        user_query = state.query
+
+        extracted_id = extract_function_params(
+            prompt=f"Extract the object ID from the following user query. user_query: {user_query}",
+            function=extract_object_id_tool
+        )
+
+        if extracted_id is not None:
+            # Query object details from MySQL database
+            sql_query = f"SELECT * FROM ObjectDB WHERE object_id = {extracted_id}"
+            results = mysql_db.query(sql_query)
+            
+            if results and len(results) > 0:
+                obj_info = results[0]
+                state.object = ObjectDB(**obj_info)
+                info_message = f"""I'll help you with information about object #{extracted_id}.\n
+                    Here are the detailed specifications:\n
+                    - Maximum Working Pressure: {obj_info['max_working_pressure_bar']} bar\n
+                    - Location: {obj_info['location']}\n
+                    - Complex: {obj_info['complex']}\n
+                    - Building Data: {obj_info['building_data']}\n
+                    - Service Contract Number: {obj_info['servicecontract_nr']}\n
+                    - SLA: {obj_info['sla']}\n
+                    - Brand: {obj_info['brand']}\n
+                    - Model: {obj_info['model']}\n
+                    - Refrigerant: {obj_info['refrigerant']}\n
+                    - Refrigerant Filling: {obj_info['refrigerant_filling_kg']} kg\n
+                """
+                
+                state.messages.append({
+                    "role": "assistant",
+                    "content": info_message
+                })
+            else:
+                state.messages.append({
+                    "role": "assistant",
+                    "content": f"I found object #{extracted_id}, but couldn't retrieve its details. Please try again."
+                })
+        else:
+            state.messages.append({
+                "role": "assistant",
+                "content": "Unfortunately I couldn't extract your object id from your query. Please try again."
+            })
+        
+    except Exception as e:
+        logger.error(f"Error in object ID extraction: {str(e)}")
+        state.object = None
     
-    # state.query = response.content
-    return state
-
-def determine_database(state: GraphState) -> DatabaseEnum:
-    is_sql = extract_function_params(prompt=sql_vector.format(
-        query=state.query,
-        conversation=format_conversation_history(state.messages)
-    ), function=sql_vector_tool)
-    if is_sql == "yes":
-        return DatabaseEnum.MYSQL
-    else:
-        return DatabaseEnum.VECTORDB
-
-def txt2sql_node(state: GraphState) -> GraphState:
-    state.database = DatabaseEnum.MYSQL
-    response = model.invoke(state.messages + [SystemMessage(generate_sql.format(
-        query=state.query
-    ))])
-    state.sql_query = response.content.strip().replace('``sql', '').replace('`', '')
     return state
 
 def data_retrieval_node(state: GraphState) -> GraphState:
     try:
-        if state.database == DatabaseEnum.MYSQL:
-            print(state.sql_query)
-            results = mysql_db.query(state.sql_query)
-        else:
-            print(state.query)
-            results = vector_db.query(state.query, top_k=3)
-            results = [result.model_dump() for result in results]
-
-        state.raw_data = results
+        # Get relevant context from vector database using the user's query
+        context_results = vector_db.query(state.query, state.object.object_id)
         
-        # Dynamically build context string using only available fields
-        context = "\n\n".join(
-            "\n".join([
-                f"{key.replace('_', ' ').title()}: {value}"
-                for key, value in lease.items()
-                if value is not None
-            ]) for lease in results
-        )
-        prompt = generate_response.format(
-            context=context,
-        )
-
-        response = model.invoke(state.messages + [HumanMessage(prompt)])
-        state.messages.append({"role": "assistant", "content": response.content})
-
+        # Format conversation history for context
+        conversation_history = format_conversation_history(state.messages)
+        
+        # Prepare system message with context from vector DB
+        system_message = troubleshoot.format(context_results=context_results, object_info=state.object, conversation_history=conversation_history)
+        
+        # Generate response using the model
+        response = model.invoke([
+            SystemMessage(content=system_message),
+            HumanMessage(content=state.query)
+        ])
+        
+        # Add response to conversation history
+        state.messages.append({
+            "role": "assistant",
+            "content": response.content
+        })
+        
     except Exception as e:
         logger.error(f"Error in data retrieval: {str(e)}")
         state.messages.append({
             "role": "assistant",
-            "content": "I apologize, but I encountered an error while retrieving the information. Could you please rephrase your question?"
+            "content": "I apologize, but I encountered an error while processing your request. Could you please rephrase your question?"
         })
-
-    return state
-
-def visualization_node(state: GraphState) -> GraphState:
-    if not state.raw_data:
-        state.visualization = {"show": False}
-        return state
-
-    # Define visualization function
-    visualization_function = {
-        "name": "determine_visualization",
-        "description": "Determine the best visualization type for the given data and query",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "visualization_type": {
-                    "type": "string",
-                    "enum": ["bar", "line", "table", "none"],
-                    "description": "Type of visualization to show. 'bar' for comparisons, 'line' for trends, 'table' for raw data, 'none' for no visualization"
-                },
-                "x_axis": {
-                    "type": "string",
-                    "description": "Field to use for x-axis"
-                },
-                "y_axis": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Fields to use for y-axis"
-                }
-            },
-            "required": ["visualization_type"]
-        }
-    }
-
-    # Get visualization recommendation from LLM
-    model_with_tools = model.bind_tools([visualization_function])
-    response = model_with_tools.invoke(state.messages + [HumanMessage(f"Query: {state.query}\nAvailable fields: {list(state.raw_data[0].keys())}")])
-
-    # Parse the function call
-    if response.tool_calls:
-        args = response.tool_calls[0]['args']
-        state.visualization = {
-            "show": args["visualization_type"] != "none",
-            "type": args["visualization_type"],
-            "data": pd.DataFrame(state.raw_data),
-            "x": args.get("x_axis", ""),
-            "y": args.get("y_axis", [])
-        }
-    else:
-        state.visualization = {"show": False}
     
     return state

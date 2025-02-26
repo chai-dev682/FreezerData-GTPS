@@ -1,8 +1,11 @@
 from pinecone.grpc import PineconeGRPC as Pinecone
 from pinecone import ServerlessSpec
 from llama_index.vector_stores.pinecone import PineconeVectorStore
+from llama_index.core.vector_stores.types import MetadataFilters, MetadataFilter, FilterOperator
 from llama_index.core.node_parser import SemanticSplitterNodeParser
 from llama_index.core.ingestion import IngestionPipeline
+from llama_index.core import VectorStoreIndex
+from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.embeddings.openai import OpenAIEmbedding
 from typing import List
 
@@ -10,6 +13,11 @@ from app.core.config import settings, ModelType
 from app.schemas.freezer_data import ObjectDB, Manuals
 from app.db.mysql import mysql_db
 from app.utils.pdf_tools import process_pdf
+
+
+def format_rag_contexts(matches: list):
+    context_str = "\n---\n".join([i.get_content() for i in matches])
+    return context_str
 
 class VectorDBService:
     def __init__(self):
@@ -22,6 +30,7 @@ class VectorDBService:
         )
         self.index = None
         self.vector_store = None
+        self.vector_index = None
         self._initialize()
 
     def _initialize(self):
@@ -49,6 +58,7 @@ class VectorDBService:
             ],
             vector_store=self.vector_store
         )
+        self.vector_index = VectorStoreIndex.from_vector_store(vector_store=self.vector_store)
 
     def upsert_manual(self, manual: Manuals):
         object_ids = mysql_db.query(f"SELECT object_id FROM ObjectManual WHERE manual_id = {manual['id']}")
@@ -58,13 +68,20 @@ class VectorDBService:
         }
         self.pipeline.run(documents=process_pdf(f"dataset/{manual['pdf_file_name']}.pdf", metadata))
 
-    def query(self, query_text: str, top_k: int = 5) -> List[ObjectDB]:
-        vector = self.embed_model.embed_documents([query_text])[0]
-        results = self.index.query(
-            vector=vector,
-            top_k=top_k,
-            include_metadata=True
+    def query(self, query_text: str, object_id: int, top_k: int = 5) -> List[ObjectDB]:
+        filters = MetadataFilters(
+            filters=[
+                MetadataFilter(
+                    key="object_ids",
+                    value=[str(object_id)],
+                    operator=FilterOperator.IN
+                )
+            ]
         )
-        return [ObjectDB(**match['metadata']) for match in results['matches']]
+        retriever = VectorIndexRetriever(index=self.vector_index, similarity_top_k=top_k, filters=filters)
+        results = retriever.retrieve(
+            query_text
+        )
+        return format_rag_contexts(results)
 
 vector_db = VectorDBService()

@@ -1,10 +1,6 @@
 from typing import List, Dict, Optional
-from enum import Enum
 from pydantic import BaseModel
-
-class DatabaseEnum(str, Enum):
-    MYSQL = "mysql"
-    VECTORDB = "vectordb"
+from app.schemas.freezer_data import ObjectDB
 
 class Message(BaseModel):
     role: str
@@ -12,8 +8,5 @@ class Message(BaseModel):
 
 class GraphState(BaseModel):
     messages: List[Dict[str, str]]
-    database: Optional[DatabaseEnum] = DatabaseEnum.VECTORDB
     query: Optional[str] = None
-    sql_query: Optional[str] = None
-    raw_data: Optional[List[Dict]] = None
-    visualization: Optional[Dict] = None
+    object: Optional[ObjectDB] = None
