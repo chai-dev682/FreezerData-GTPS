@@ -33,8 +33,8 @@ A Streamlit-based chatbot application powered by OpenAI that helps users analyze
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/chai-dev682/ai-driven-gtps.git
-cd ai-driven-gtps
+git clone https://github.com/chai-dev682/FreezerData-GTPS.git
+cd FreezerData-GTPS
 ```
 
 2. Create a virtual environment:
@@ -57,6 +57,7 @@ cp .env.example .env
 ## Project Structure
 
 ```README.MD
+├── dataset/                      # Dataset(pdf, csv) for sql and vector database
 ├── app/
 │   ├── core/
 │   │   ├── config.py             # Application configuration
@@ -68,9 +69,14 @@ cp .env.example .env
 │   │   └── vectordb.py           # Pinecone vector database service
 │   ├── schemas/
 │   │   └── freezer_data.py       # Data models
-│   └── services/
-│       ├── chat.py               # Chat service
-│       └── graph/                # LangGraph workflow
+│   ├── services/
+│   │   ├── chat.py               # Chat service
+│   │   └── graph/                # LangGraph workflow
+│   ├── utils/
+│   │   └── pdf_tools.py          # PDF processing utilities
+├── scripts/
+│   ├── process_pdf.py        # Process pdf files to embed and store in vector database
+│   └── process_csv.py        # Process csv files to store in mysql database
 ├── main.py                       # Application entry point
 ├── requirements.txt              # Project dependencies
 ├── .env                          # Environment variables
