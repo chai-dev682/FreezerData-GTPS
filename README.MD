@@ -89,3 +89,8 @@ Start the application:
 ```bash
 streamlit run main.py
 ```
+
+start the application using Docker:
+```bash
+docker compose up -d
+```
